@@ -1,0 +1,6 @@
+{
+  "name": "FarmPal",
+  "description": "Simple and intelligent farm record-keeping, cooperative produce aggregation, agri-credit scoring, agro-weather advisory, and pilot farmer testing feedback hub.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
