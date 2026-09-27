@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { db } from './server/store';
@@ -1473,6 +1474,159 @@ app.post(['/api/reset', '/api/reset-seed'], (req, res) => {
   const fresh = new (db.constructor as any)();
   Object.assign(db, fresh);
   res.json({ message: 'Reset to seed data complete' });
+});
+
+// ======================== GITHUB & EXPORT ENDPOINTS ========================
+
+// Get Git repository status
+app.get('/api/github/status', (req, res) => {
+  try {
+    const isGit = fs.existsSync(path.join(process.cwd(), '.git'));
+    if (!isGit) {
+      return res.json({
+        initialized: false,
+        message: 'Git repository not initialized',
+      });
+    }
+
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim();
+    const lastCommitHash = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    const lastCommitMsg = execSync('git log -1 --pretty=%B', { encoding: 'utf8' }).trim();
+    const lastCommitDate = execSync('git log -1 --pretty=%cd --date=relative', { encoding: 'utf8' }).trim();
+    const totalCommits = execSync('git rev-list --count HEAD', { encoding: 'utf8' }).trim();
+
+    let remoteOrigin = '';
+    try {
+      remoteOrigin = execSync('git remote get-url origin', { encoding: 'utf8' }).trim();
+    } catch {
+      remoteOrigin = '';
+    }
+
+    res.json({
+      initialized: true,
+      branch,
+      lastCommitHash,
+      lastCommitMsg,
+      lastCommitDate,
+      totalCommits: parseInt(totalCommits, 10) || 1,
+      remoteOrigin: remoteOrigin ? remoteOrigin.replace(/\/\/[^@]+@/, '//***@') : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to query git status', details: err?.message || String(err) });
+  }
+});
+
+// Download full project source zip (ready for GitHub or offline development)
+app.get('/api/github/export-zip', (req, res) => {
+  try {
+    const zipPath = path.join('/tmp', `farmpal-source-${Date.now()}.zip`);
+    const scriptPath = path.join(process.cwd(), 'scripts', 'export-zip.py');
+    const includeGit = req.query.git === 'true' ? ' --include-git' : '';
+
+    execSync(`python3 "${scriptPath}" "${zipPath}"${includeGit}`);
+
+    if (!fs.existsSync(zipPath)) {
+      return res.status(500).json({ error: 'Zip file generation failed' });
+    }
+
+    res.download(zipPath, 'farmpal-source.zip', () => {
+      try {
+        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+      } catch (_) {}
+    });
+  } catch (err: any) {
+    console.error('Error generating export zip:', err);
+    res.status(500).json({ error: 'Failed to generate project zip archive' });
+  }
+});
+
+// Push directly to remote GitHub repository
+app.post('/api/github/push', (req, res) => {
+  const { repoUrl, token, branch = 'main' } = req.body;
+
+  if (!repoUrl || typeof repoUrl !== 'string') {
+    return res.status(400).json({ error: 'Please provide a valid GitHub repository URL (e.g., https://github.com/username/repository.git)' });
+  }
+
+  // Clean and sanitize repository URL
+  let cleanUrl = repoUrl.trim();
+  if (!cleanUrl.startsWith('https://github.com/')) {
+    return res.status(400).json({ error: 'Repository URL must start with https://github.com/' });
+  }
+  if (!cleanUrl.endsWith('.git')) {
+    cleanUrl += '.git';
+  }
+
+  try {
+    // Check if git is initialized
+    if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
+      execSync('git init -b main');
+      execSync('git config user.name "Temple Nwobodo"');
+      execSync('git config user.email "nwobodotemple2002@gmail.com"');
+      execSync('git add .');
+      execSync('git commit -m "feat: initial commit of FarmPal"');
+    } else {
+      // Stage any new uncommitted changes
+      execSync('git add -A');
+      try {
+        execSync('git commit -m "chore: sync farm records and updates"');
+      } catch (_) {
+        // No changes to commit is fine
+      }
+    }
+
+    // Prepare authenticated URL if token provided
+    let pushUrl = cleanUrl;
+    if (token && typeof token === 'string' && token.trim()) {
+      const sanitizedToken = token.trim();
+      const stripped = cleanUrl.replace('https://', '');
+      pushUrl = `https://${encodeURIComponent(sanitizedToken)}@${stripped}`;
+    }
+
+    // Set or replace remote origin
+    try {
+      execSync('git remote remove origin', { stdio: 'ignore' });
+    } catch (_) {}
+
+    execSync(`git remote add origin "${pushUrl}"`);
+
+    // Ensure branch is named properly
+    execSync(`git branch -M "${branch}"`);
+
+    // Push to GitHub
+    execSync(`git push -u origin "${branch}" --force`, {
+      timeout: 30000,
+      stdio: 'pipe',
+    });
+
+    // Reset origin to clean URL without token so credentials are never saved in git config
+    try {
+      execSync('git remote remove origin', { stdio: 'ignore' });
+      execSync(`git remote add origin "${cleanUrl}"`);
+    } catch (_) {}
+
+    res.json({
+      success: true,
+      message: `Successfully pushed FarmPal codebase to ${cleanUrl} on branch '${branch}'! 🚀`,
+      repoUrl: cleanUrl,
+      branch,
+    });
+  } catch (err: any) {
+    const rawError = err?.stderr?.toString() || err?.message || 'Push command failed';
+    // Sanitize any token from error message
+    const sanitizedError = rawError.replace(/https:\/\/[^@]+@/g, 'https://***@');
+    console.error('Git push error:', sanitizedError);
+
+    res.status(500).json({
+      error: 'Failed to push to GitHub',
+      details: sanitizedError,
+      suggestion: sanitizedError.includes('Authentication failed') || sanitizedError.includes('could not read Username')
+        ? 'Please check your GitHub Personal Access Token (PAT). Make sure it has "repo" scope permissions.'
+        : sanitizedError.includes('Repository not found')
+        ? 'Repository was not found. Please ensure the repository exists on GitHub and that your token has access to it.'
+        : 'Ensure your GitHub token and repository URL are correct, or download the project ZIP to push manually.',
+    });
+  }
 });
 
 // ======================== VITE / PRODUCTION ========================
