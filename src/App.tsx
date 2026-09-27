@@ -22,6 +22,7 @@ import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { FarmerFeedbackModal } from './components/FarmerFeedbackModal';
 import { TesterGuideDrawer } from './components/TesterGuideDrawer';
 import { TesterFeedbackView } from './components/TesterFeedbackView';
+import { GitHubModal } from './components/GitHubModal';
 import { MessageSquare, Sparkles } from 'lucide-react';
 import {
   Crop,
@@ -79,6 +80,7 @@ export default function App() {
   const [isUssdModalOpen, setIsUssdModalOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const [isTesterGuideOpen, setIsTesterGuideOpen] = useState(false);
+  const [isGitHubModalOpen, setIsGitHubModalOpen] = useState(false);
   const [feedbackCount, setFeedbackCount] = useState(3);
   const [testerToastMessage, setTesterToastMessage] = useState<string | null>(null);
 
@@ -367,6 +369,7 @@ export default function App() {
         hasActiveReminder={profile.dailyReminderEnabled}
         onOpenFeedbackModal={() => setIsFeedbackModalOpen(true)}
         onOpenTesterGuide={() => setIsTesterGuideOpen(true)}
+        onOpenGitHubModal={() => setIsGitHubModalOpen(true)}
         feedbackCount={feedbackCount}
       />
 
@@ -481,6 +484,7 @@ export default function App() {
                 profile={profile}
                 onUpdateProfile={handleUpdateProfile}
                 onResetSeed={handleResetSeed}
+                onOpenGitHubModal={() => setIsGitHubModalOpen(true)}
                 onTriggerTestReminder={async () => {
                   const rem = await fetchDailyReminder(true);
                   if (rem) setShowReminderBanner(true);
@@ -664,6 +668,12 @@ export default function App() {
           setTesterToastMessage('Nagode! Your feedback has been recorded in the Farmer Feedback Hub.');
           setTimeout(() => setTesterToastMessage(null), 5000);
         }}
+      />
+
+      {/* MODAL 7: GitHub Push & Export Source Code */}
+      <GitHubModal
+        isOpen={isGitHubModalOpen}
+        onClose={() => setIsGitHubModalOpen(false)}
       />
 
       {/* DRAWER: Farmer Pilot Testing Guide */}
